@@ -172,4 +172,4 @@ else:
         text = ""
         for page in reader.pages:
             extracted = page.extract_text()
-            if extracted
+            if extracted:
