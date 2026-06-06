@@ -31,10 +31,8 @@ st.markdown("""
         max-width: 450px;
         margin: 40px auto;
         padding: 30px;
-        background-color: #ffffff;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        color: #111827;
+        background-color: transparent;
+        color: #ffffff;
     }
     /* Styling for our custom stethoscope logo */
     .logo-container {
@@ -46,7 +44,7 @@ st.markdown("""
         margin-bottom: 15px;
     }
     .logo-doc {
-        color: #1d3557;
+        color: #24b4ff; 
     }
     .logo-file {
         color: #457b9d;
@@ -55,6 +53,12 @@ st.markdown("""
         width: 46px;
         vertical-align: middle;
         margin: 0 -4px;
+    }
+    /* This completely hides the default white form background block */
+    div[data-testid="stForm"] {
+        background-color: transparent !important;
+        border: none !important;
+        padding: 0 !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -69,7 +73,6 @@ if "logged_in" not in st.session_state:
 if not st.session_state["logged_in"]:
     st.markdown('<div class="login-container">', unsafe_allow_html=True)
     
-    # 🌟 NEW CUSTOM LOGO (Doc + Stethoscope Image + File)
     st.markdown("""
         <div class="logo-container">
             <span class="logo-doc">Doc</span>
@@ -78,15 +81,12 @@ if not st.session_state["logged_in"]:
         </div>
     """, unsafe_allow_html=True)
     
-    st.markdown('<h2 style="text-align:center; color:#111827; margin-top:0;">🔐 Login Area</h2>', unsafe_allow_html=True)
-    st.write("<p style='text-align:center; color:#6b7280;'>Fill your details and press Enter to access clinical tools.</p>", unsafe_allow_html=True)
+    st.markdown('<h2 style="text-align:center; margin-top:0;">🔐 Login Area</h2>', unsafe_allow_html=True)
+    st.write("<p style='text-align:center; color:#9ca3af;'>Fill your details and press Enter to access clinical tools.</p>", unsafe_allow_html=True)
     
-    # 🌟 NEW FORM WRAPPER (Enables pressing Enter to submit)
     with st.form("login_form", clear_on_submit=False):
         username = st.text_input("Username", placeholder="Enter username")
         password = st.text_input("Password", type="password", placeholder="Enter password")
-        
-        # Every form needs a form_submit_button
         submit_button = st.form_submit_button("Log In", use_container_width=True)
         
         if submit_button:
@@ -116,7 +116,7 @@ else:
     """, unsafe_allow_html=True)
 
     # ---------------------------------
-    # LOCAL CLINICAL PARSER (No AI/API Needed)
+    # LOCAL CLINICAL PARSER
     # ---------------------------------
     def parse_clinical_text(text):
         sections = {
@@ -172,30 +172,4 @@ else:
         text = ""
         for page in reader.pages:
             extracted = page.extract_text()
-            if extracted:
-                text += extracted
-        return text
-
-    def generate_pdf(summary_text, name, dob, mrn):
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Arial", style="B", size=16)
-        pdf.cell(0, 10, "DocUFile Clinical Summary Report", ln=True, align="C")
-        pdf.ln(5)
-        
-        pdf.set_font("Arial", size=11)
-        pdf.cell(0, 7, f"Patient Name: {name if name else 'N/A'}", ln=True)
-        pdf.cell(0, 7, f"Date of Birth: {dob if dob else 'N/A'}", ln=True)
-        pdf.cell(0, 7, f"Medical Record #: {mrn if mrn else 'N/A'}", ln=True)
-        pdf.line(10, pdf.get_y() + 2, 200, pdf.get_y() + 2)
-        pdf.ln(10)
-
-        for line in summary_text.split("\n"):
-            clean_line = line.encode('latin1', 'ignore').decode('latin1')
-            pdf.multi_cell(0, 8, clean_line)
-        
-        pdf_bytes = pdf.output()
-        return io.BytesIO(pdf_bytes)
-
-    # ---------------------------------
-    # SIDEBAR: PAT
+            if extracted
