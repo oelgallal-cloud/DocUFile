@@ -168,7 +168,6 @@ else:
             
         return sections
 
-    # Updated to loop through multiple files and stitch them into one massive string
     def extract_text_from_multiple(uploaded_files_list):
         combined_text = ""
         for file in uploaded_files_list:
@@ -186,12 +185,15 @@ else:
         pdf.add_page()
         pdf.set_auto_page_break(auto=True, margin=15)
         
-        # Built-in sanitizer to prevent the FPDFException crash on weird text
-        def safe_text(text):
-            text = str(text).replace('\t', ' ').replace('\xa0', ' ')
-            words = [w[:90] + '...' if len(w) > 90 else w for w in text.split(' ')]
-            clean_str = " ".join(words)
-            return clean_str.encode('latin1', 'ignore').decode('latin1')
+        # INDESTRUCTIBLE SANITIZER: Forces spaces so FPDF never runs out of horizontal room
+        def safe_text(raw_text):
+            # 1. Clean weird hidden PDF formatting blocks
+            clean = str(raw_text).replace('\t', ' ').replace('\xa0', ' ')
+            # 2. Force Latin-1 encoding so weird symbols don't crash the engine
+            clean = clean.encode('latin1', 'ignore').decode('latin1')
+            # 3. Mathematically force a space every 60 continuous non-space characters
+            clean = re.sub(r'([^\s]{60})', r'\1 ', clean)
+            return clean
 
         pdf.set_font("Arial", style="B", size=16)
         pdf.cell(0, 10, "DocUFile Master Clinical Report", ln=True, align="C")
