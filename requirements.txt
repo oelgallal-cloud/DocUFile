@@ -1,7 +1,5 @@
 streamlit
 requests
-PyPDF2
+pypdf
 numpy
-pdf2image
-easyocr
 fpdf2
