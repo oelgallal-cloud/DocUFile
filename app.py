@@ -13,7 +13,7 @@ from fpdf import FPDF
 # ---------------------------------
 st.set_page_config(page_title="DocUFile", page_icon="🩺", layout="wide")
 
-# Custom CSS styling to match your beautiful UI cards
+# Custom CSS styling to match your clinical dashboard cards
 st.markdown("""
     <style>
     .main-header {
@@ -51,14 +51,13 @@ st.markdown("""
 # ---------------------------------
 # LOGIN SYSTEM STATE
 # ---------------------------------
-# This checks if the user is logged in. If not, it defaults to False.
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
 # --- LOGIN PAGE INTERFACE ---
 if not st.session_state["logged_in"]:
     st.markdown('<div class="login-container">', unsafe_allow_html=True)
-    st.image("https://cdn-icons-png.flaticon.com/512/5087/5087579.png", width=100) # Generic login icon
+    st.image("https://cdn-icons-png.flaticon.com/512/5087/5087579.png", width=100)
     st.title("🔐 DocUFile Login")
     st.write("Please sign in to access clinical tools.")
     
@@ -69,37 +68,4 @@ if not st.session_state["logged_in"]:
         if username == "admin" and password == "admin":
             st.session_state["logged_in"] = True
             st.success("Access Granted!")
-            st.rerun() # Refresh page to show the app
-        else:
-            st.error("Incorrect Username or Password. Please try again.")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# --- LOCKED CONTENT (ONLY SHOWS IF LOGGED IN) ---
-else:
-    # Sidebar logout option
-    if st.sidebar.button("🚪 Log Out"):
-        st.session_state["logged_in"] = False
-        st.rerun()
-
-    # App Banner
-    st.markdown("""
-        <div class="main-header">
-            <h1>🩺 DocUFile</h1>
-            <p>Secure Clinical Document Summarizer & Triage Assistant</p>
-            <span style="background-color: rgba(255,255,255,0.2); padding: 5px 10px; border-radius: 15px; font-size: 0.8em;">
-                🔒 Zero-retention • Local Execution • Auto-wiped on close
-            </span>
-        </div>
-    """, unsafe_allow_html=True)
-
-    # Initialize OCR
-    @st.cache_resource
-    def load_ocr():
-        return easyocr.Reader(["en"])
-
-    reader = load_ocr()
-
-    # ---------------------------------
-    # LOCAL OLLAMA CONNECTION (No Key Required)
-    # ---------------------------------
-    def call_ollama(prompt
+            st.rer
