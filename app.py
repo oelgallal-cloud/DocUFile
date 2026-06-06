@@ -2,7 +2,10 @@ import streamlit as st
 from pypdf import PdfReader
 import io
 import re
-from fpdf import FPDF
+import html
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
 # ---------------------------------
 # PAGE SETTINGS & STYLING
@@ -157,7 +160,6 @@ else:
         else:
             sections["History"] = "Clinical text scanned. Past history landmarks found throughout source file text body."
 
-        # Expanded to 20,000 chars to comfortably hold data from multiple aggregated PDFs
         summary_limit = 20000 
         sections["Summary"] = text[:summary_limit].strip() + ("\n\n...[End of extraction reach]" if len(text) > summary_limit else "")
         
@@ -180,62 +182,58 @@ else:
                     combined_text += extracted + "\n"
         return combined_text
 
+    # --- THE NEW CRASH-PROOF REPORTLAB PDF GENERATOR ---
     def generate_pdf(summary_text, alerts, meds, history, name, dob, mrn):
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_auto_page_break(auto=True, margin=15)
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
         
-        # THE ULTIMATE SANITIZER: Manually chops impossible words into pieces
+        styles = getSampleStyleSheet()
+        Normal = styles['Normal']
+        Heading2 = styles['Heading2']
+        TitleStyle = styles['Title']
+
+        # Cleans text so ReportLab doesn't confuse symbols with HTML tags
         def safe_text(raw_text):
-            clean = str(raw_text).replace('\t', ' ').replace('\xa0', ' ')
-            clean = clean.encode('latin1', 'ignore').decode('latin1')
-            
-            words = []
-            for word in clean.split(' '):
-                # If a "word" is longer than 50 characters, chop it into 50-char blocks and insert spaces
-                if len(word) > 50:
-                    chunked_word = ' '.join(word[i:i+50] for i in range(0, len(word), 50))
-                    words.append(chunked_word)
-                else:
-                    words.append(word)
-            return " ".join(words)
+            clean = html.escape(str(raw_text))
+            # Mathematically force a space in giant barcode-like strings
+            clean = re.sub(r'([^\s]{70})', r'\1 ', clean)
+            return clean
 
-        pdf.set_font("Arial", style="B", size=16)
-        pdf.cell(0, 10, "DocUFile Master Clinical Report", ln=True, align="C")
-        pdf.ln(5)
+        story = []
+
+        # Header
+        story.append(Paragraph("DocUFile Master Clinical Report", TitleStyle))
+        story.append(Spacer(1, 12))
         
-        pdf.set_font("Arial", size=11)
-        pdf.cell(0, 7, f"Patient Name: {safe_text(name) if name else 'N/A'}", ln=True)
-        pdf.cell(0, 7, f"Date of Birth: {safe_text(dob) if dob else 'N/A'}", ln=True)
-        pdf.cell(0, 7, f"Medical Record #: {safe_text(mrn) if mrn else 'N/A'}", ln=True)
-        pdf.line(10, pdf.get_y() + 2, 200, pdf.get_y() + 2)
-        pdf.ln(10)
+        # Patient Info
+        story.append(Paragraph(f"<b>Patient Name:</b> {safe_text(name) if name else 'N/A'}", Normal))
+        story.append(Paragraph(f"<b>Date of Birth:</b> {safe_text(dob) if dob else 'N/A'}", Normal))
+        story.append(Paragraph(f"<b>Medical Record #:</b> {safe_text(mrn) if mrn else 'N/A'}", Normal))
+        story.append(Spacer(1, 15))
 
-        pdf.set_font("Arial", style="B", size=12)
-        pdf.cell(0, 8, "Aggregated Critical Alerts & Red Flags:", ln=True)
-        pdf.set_font("Arial", size=11)
+        # Alerts Section
+        story.append(Paragraph("<b>Aggregated Critical Alerts & Red Flags:</b>", Heading2))
         for alert in alerts:
-            pdf.multi_cell(0, 6, f"- {safe_text(alert)}")
-        pdf.ln(5)
+            story.append(Paragraph(f"• {safe_text(alert)}", Normal))
+        story.append(Spacer(1, 10))
 
-        pdf.set_font("Arial", style="B", size=12)
-        pdf.cell(0, 8, "Aggregated Medications:", ln=True)
-        pdf.set_font("Arial", size=11)
+        # Meds Section
+        story.append(Paragraph("<b>Aggregated Medications:</b>", Heading2))
         for med in meds[:25]: 
-            pdf.multi_cell(0, 6, f"- {safe_text(med)}")
-        pdf.ln(5)
+            story.append(Paragraph(f"• {safe_text(med)}", Normal))
+        story.append(Spacer(1, 10))
 
-        pdf.set_font("Arial", style="B", size=12)
-        pdf.cell(0, 8, "Combined Text Extraction (All Files):", ln=True)
-        pdf.set_font("Arial", size=11)
-        
+        # Summary Section
+        story.append(Paragraph("<b>Combined Text Extraction (All Files):</b>", Heading2))
         for line in summary_text.split("\n"):
             if line.strip():
-                pdf.multi_cell(0, 6, safe_text(line))
-                pdf.ln(2)
+                story.append(Paragraph(safe_text(line), Normal))
+                story.append(Spacer(1, 4))
         
-        pdf_bytes = pdf.output()
-        return io.BytesIO(pdf_bytes)
+        # Build document and return
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
 
     # ---------------------------------
     # SIDEBAR & MAIN INTERFACE
