@@ -115,3 +115,167 @@ else:
 
     # ---------------------------------
     # LOCAL CLINICAL PARSER
+    # ---------------------------------
+    def parse_clinical_text(text):
+        sections = {
+            "Summary": "No general summary layout detected in text structure.",
+            "Critical_Alerts": [],
+            "Medications": [],
+            "History": "No clear past historical section found."
+        }
+        
+        text = re.sub(r'\n\s*\n', '\n\n', text)
+        lines = text.split('\n')
+        
+        for line in lines:
+            if any(k in line.lower() for k in ['mg', 'mcg', 'tabs', 'caps', 'daily', 'bid', 'tid', 'po', 'rx']):
+                clean_line = line.strip()
+                if len(clean_line) > 5 and clean_line not in sections["Medications"]:
+                    sections["Medications"].append(clean_line)
+                    
+        critical_keywords = ['critical', 'severe', 'abnormal', 'alert', 'positive', 'high risk', 'emergency', 'acute', 'allergic', 'allergy', 'malignant', 'fail']
+        for line in lines:
+            if any(ck in line.lower() for ck in critical_keywords):
+                clean_alert = line.strip()
+                if len(clean_alert) > 5 and clean_alert not in sections["Critical_Alerts"]:
+                    sections["Critical_Alerts"].append(clean_alert)
+
+        history_blocks = []
+        capture_history = False
+        
+        for line in lines:
+            if any(h_key in line.lower() for h_key in ['history', 'past medical', 'pmh', 'prior diagnosis']):
+                capture_history = True
+                continue
+            if capture_history and any(stop_key in line.lower() for stop_key in ['medication', 'plan', 'signature', 'vital', 'labs']):
+                capture_history = False
+            if capture_history and line.strip():
+                history_blocks.append(line.strip())
+
+        if history_blocks:
+            sections["History"] = "\n".join(history_blocks[:25]) 
+        else:
+            sections["History"] = "Clinical text scanned. Past history landmarks found throughout source file text body."
+
+        # Expanded to 20,000 chars to comfortably hold data from multiple aggregated PDFs
+        summary_limit = 20000 
+        sections["Summary"] = text[:summary_limit].strip() + ("\n\n...[End of extraction reach]" if len(text) > summary_limit else "")
+        
+        if not sections["Critical_Alerts"]:
+            sections["Critical_Alerts"].append("No acute warning keywords or explicit critical threshold violations flagged.")
+        if not sections["Medications"]:
+            sections["Medications"].append("No specific dosage metrics or medication logs extracted.")
+            
+        return sections
+
+    # Updated to loop through multiple files and stitch them into one massive string
+    def extract_text_from_multiple(uploaded_files_list):
+        combined_text = ""
+        for file in uploaded_files_list:
+            combined_text += f"\n\n{'='*40}\n📄 SOURCE FILE: {file.name}\n{'='*40}\n\n"
+            file_bytes = file.read()
+            reader = PdfReader(io.BytesIO(file_bytes))
+            for page in reader.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    combined_text += extracted + "\n"
+        return combined_text
+
+    def generate_pdf(summary_text, alerts, meds, history, name, dob, mrn):
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        
+        # Built-in sanitizer to prevent the FPDFException crash on weird text
+        def safe_text(text):
+            text = str(text).replace('\t', ' ').replace('\xa0', ' ')
+            words = [w[:90] + '...' if len(w) > 90 else w for w in text.split(' ')]
+            clean_str = " ".join(words)
+            return clean_str.encode('latin1', 'ignore').decode('latin1')
+
+        pdf.set_font("Arial", style="B", size=16)
+        pdf.cell(0, 10, "DocUFile Master Clinical Report", ln=True, align="C")
+        pdf.ln(5)
+        
+        pdf.set_font("Arial", size=11)
+        pdf.cell(0, 7, f"Patient Name: {safe_text(name) if name else 'N/A'}", ln=True)
+        pdf.cell(0, 7, f"Date of Birth: {safe_text(dob) if dob else 'N/A'}", ln=True)
+        pdf.cell(0, 7, f"Medical Record #: {safe_text(mrn) if mrn else 'N/A'}", ln=True)
+        pdf.line(10, pdf.get_y() + 2, 200, pdf.get_y() + 2)
+        pdf.ln(10)
+
+        pdf.set_font("Arial", style="B", size=12)
+        pdf.cell(0, 8, "Aggregated Critical Alerts & Red Flags:", ln=True)
+        pdf.set_font("Arial", size=11)
+        for alert in alerts:
+            pdf.multi_cell(0, 6, f"- {safe_text(alert)}")
+        pdf.ln(5)
+
+        pdf.set_font("Arial", style="B", size=12)
+        pdf.cell(0, 8, "Aggregated Medications:", ln=True)
+        pdf.set_font("Arial", size=11)
+        for med in meds[:25]: 
+            pdf.multi_cell(0, 6, f"- {safe_text(med)}")
+        pdf.ln(5)
+
+        pdf.set_font("Arial", style="B", size=12)
+        pdf.cell(0, 8, "Combined Text Extraction (All Files):", ln=True)
+        pdf.set_font("Arial", size=11)
+        
+        for line in summary_text.split("\n"):
+            if line.strip():
+                pdf.multi_cell(0, 6, safe_text(line))
+                pdf.ln(2)
+        
+        pdf_bytes = pdf.output()
+        return io.BytesIO(pdf_bytes)
+
+    # ---------------------------------
+    # SIDEBAR & MAIN INTERFACE
+    # ---------------------------------
+    st.sidebar.title("📋 Patient Demographics")
+    st.sidebar.write("Optional — used only for the PDF report header.")
+    patient_name = st.sidebar.text_input("Patient Full Name", placeholder="Jane Smith")
+    patient_dob = st.sidebar.text_input("Date of Birth", placeholder="MM/DD/YYYY")
+    patient_mrn = st.sidebar.text_input("Medical Record # (MRN)", placeholder="123-456-789")
+
+    st.markdown("<br><hr>", unsafe_allow_html=True)
+
+    uploaded_files = st.file_uploader(
+        "📂 Upload Patient PDF(s) [Up to 300MB supported]",
+        type="pdf",
+        accept_multiple_files=True
+    )
+
+    if uploaded_files:
+        if st.button("🚀 Process All Files Together"):
+            st.info(f"Merging {len(uploaded_files)} document(s) into a master file...")
+            
+            with st.spinner("Extracting and analyzing batch data..."):
+                raw_text = extract_text_from_multiple(uploaded_files)
+                result = parse_clinical_text(raw_text)
+
+            st.write("### 🚨 Master Extracted Red Flags")
+            alerts = result.get("Critical_Alerts", [])
+            for alert in alerts:
+                st.write(f"- {alert}")
+
+            st.write("### 🩺 Master Document Ready")
+            st.success("Batch successfully parsed! Click below to download the compiled multi-page PDF report.")
+
+            pdf_buffer = generate_pdf(
+                summary_text=result.get("Summary", ""),
+                alerts=result.get("Critical_Alerts", []),
+                meds=result.get("Medications", []),
+                history=result.get("History", ""),
+                name=patient_name, 
+                dob=patient_dob, 
+                mrn=patient_mrn
+            )
+
+            st.download_button(
+                label="⬇️ Download Master PDF Report",
+                data=pdf_buffer,
+                file_name="DocUFile_Master_Report.pdf",
+                mime="application/pdf"
+            )
