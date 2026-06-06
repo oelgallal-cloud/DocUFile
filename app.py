@@ -87,5 +87,10 @@ if not st.session_state["logged_in"]:
         password = st.text_input("Password", type="password", placeholder="Enter password")
         submit_button = st.form_submit_button("Log In", use_container_width=True)
         
-        if submit_button:
-            if username
+      if submit_button:
+            if username == "admin" and password == "admin":
+                st.session_state["logged_in"] = True
+                st.success("Access Granted!")
+                st.rerun()
+            else:
+                st.error("Incorrect Username or Password. Please try again.")
