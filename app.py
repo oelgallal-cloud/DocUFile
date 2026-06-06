@@ -185,15 +185,20 @@ else:
         pdf.add_page()
         pdf.set_auto_page_break(auto=True, margin=15)
         
-        # INDESTRUCTIBLE SANITIZER: Forces spaces so FPDF never runs out of horizontal room
+        # THE ULTIMATE SANITIZER: Manually chops impossible words into pieces
         def safe_text(raw_text):
-            # 1. Clean weird hidden PDF formatting blocks
             clean = str(raw_text).replace('\t', ' ').replace('\xa0', ' ')
-            # 2. Force Latin-1 encoding so weird symbols don't crash the engine
             clean = clean.encode('latin1', 'ignore').decode('latin1')
-            # 3. Mathematically force a space every 60 continuous non-space characters
-            clean = re.sub(r'([^\s]{60})', r'\1 ', clean)
-            return clean
+            
+            words = []
+            for word in clean.split(' '):
+                # If a "word" is longer than 50 characters, chop it into 50-char blocks and insert spaces
+                if len(word) > 50:
+                    chunked_word = ' '.join(word[i:i+50] for i in range(0, len(word), 50))
+                    words.append(chunked_word)
+                else:
+                    words.append(word)
+            return " ".join(words)
 
         pdf.set_font("Arial", style="B", size=16)
         pdf.cell(0, 10, "DocUFile Master Clinical Report", ln=True, align="C")
