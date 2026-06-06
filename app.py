@@ -166,10 +166,12 @@ else:
             
         return sections
 
-    def extract_text(uploaded_file):
+   def extract_text(uploaded_file):
         file_bytes = uploaded_file.read()
         reader = PdfReader(io.BytesIO(file_bytes))
         text = ""
         for page in reader.pages:
             extracted = page.extract_text()
             if extracted:
+                text += extracted
+        return text
