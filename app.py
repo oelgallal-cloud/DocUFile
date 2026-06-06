@@ -34,7 +34,6 @@ st.markdown("""
         background-color: transparent;
         color: #ffffff;
     }
-    /* Styling for our custom stethoscope logo */
     .logo-container {
         text-align: center;
         font-family: 'Helvetica Neue', Arial, sans-serif;
@@ -54,7 +53,6 @@ st.markdown("""
         vertical-align: middle;
         margin: 0 -4px;
     }
-    /* This completely hides the default white form background block */
     div[data-testid="stForm"] {
         background-color: transparent !important;
         border: none !important;
@@ -163,15 +161,3 @@ else:
             sections["Critical_Alerts"].append("No acute warning keywords or explicit critical threshold violations flagged.")
         if not sections["Medications"]:
             sections["Medications"].append("No specific dosage metrics or medication logs extracted.")
-            
-        return sections
-
-   def extract_text(uploaded_file):
-        file_bytes = uploaded_file.read()
-        reader = PdfReader(io.BytesIO(file_bytes))
-        text = ""
-        for page in reader.pages:
-            extracted = page.extract_text()
-            if extracted:
-                text += extracted
-        return text
