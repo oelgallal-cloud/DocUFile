@@ -5,7 +5,7 @@ import re
 import html
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # ---------------------------------
 # PAGE SETTINGS & STYLING
@@ -109,81 +109,69 @@ else:
     st.markdown("""
         <div class="main-header">
             <h1>🩺 DocUFile</h1>
-            <p>Secure Clinical Document Parser & Triage Assistant</p>
+            <p>Targeted Clinical Extraction & Urgent Diagnostics Parser</p>
             <span style="background-color: rgba(255,255,255,0.2); padding: 5px 10px; border-radius: 15px; font-size: 0.8em;">
-                🔒 Zero API Keys Required • 100% Local Processing • Multi-File Batch Ready
+                🔒 Zero API Keys • Bullet Point Summarization • Focus on Diagnostics
             </span>
         </div>
     """, unsafe_allow_html=True)
 
     # ---------------------------------
-    # LOCAL CLINICAL PARSER
+    # TARGETED DIAGNOSTICS PARSER
     # ---------------------------------
     def parse_clinical_text(text):
-        sections = {
-            "Summary": "No general summary layout detected in text structure.",
-            "Critical_Alerts": [],
-            "Medications": [],
-            "History": "No clear past historical section found."
-        }
-        
-        text = re.sub(r'\n\s*\n', '\n\n', text)
-        lines = text.split('\n')
-        
-        for line in lines:
-            if any(k in line.lower() for k in ['mg', 'mcg', 'tabs', 'caps', 'daily', 'bid', 'tid', 'po', 'rx']):
-                clean_line = line.strip()
-                if len(clean_line) > 5 and clean_line not in sections["Medications"]:
-                    sections["Medications"].append(clean_line)
-                    
-        critical_keywords = ['critical', 'severe', 'abnormal', 'alert', 'positive', 'high risk', 'emergency', 'acute', 'allergic', 'allergy', 'malignant', 'fail']
-        for line in lines:
-            if any(ck in line.lower() for ck in critical_keywords):
-                clean_alert = line.strip()
-                if len(clean_alert) > 5 and clean_alert not in sections["Critical_Alerts"]:
-                    sections["Critical_Alerts"].append(clean_alert)
+        # 1. Clean weird PDF line breaks to form proper continuous sentences
+        clean_text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text) 
+        # 2. Split the massive text block into individual grammatical sentences
+        sentences = re.split(r'(?<=[.!?])\s+', clean_text)
 
-        history_blocks = []
-        capture_history = False
-        
-        for line in lines:
-            if any(h_key in line.lower() for h_key in ['history', 'past medical', 'pmh', 'prior diagnosis']):
-                capture_history = True
-                continue
-            if capture_history and any(stop_key in line.lower() for stop_key in ['medication', 'plan', 'signature', 'vital', 'labs']):
-                capture_history = False
-            if capture_history and line.strip():
-                history_blocks.append(line.strip())
+        urgent_bullets = []
+        diag_bullets = []
 
-        if history_blocks:
-            sections["History"] = "\n".join(history_blocks[:25]) 
-        else:
-            sections["History"] = "Clinical text scanned. Past history landmarks found throughout source file text body."
+        urgent_keywords = ['acute', 'severe', 'critical', 'emergency', 'urgent', 'abnormal', 'malignant', 'life-threatening', 'stat', 'immediate']
+        diag_keywords = ['diagnosis', 'diagnoses', 'assessment', 'impression', 'condition', 'icd', 'syndrome', 'disease', 'disorder', 'pathology']
 
-        summary_limit = 20000 
-        sections["Summary"] = text[:summary_limit].strip() + ("\n\n...[End of extraction reach]" if len(text) > summary_limit else "")
-        
-        if not sections["Critical_Alerts"]:
-            sections["Critical_Alerts"].append("No acute warning keywords or explicit critical threshold violations flagged.")
-        if not sections["Medications"]:
-            sections["Medications"].append("No specific dosage metrics or medication logs extracted.")
+        for sentence in sentences:
+            s_lower = sentence.lower()
+            clean_s = sentence.strip()
             
-        return sections
+            # Skip tiny fragments that aren't real sentences
+            if len(clean_s) < 15: 
+                continue
+
+            # Prioritize urgent flags first
+            if any(k in s_lower for k in urgent_keywords):
+                if clean_s not in urgent_bullets:
+                    urgent_bullets.append(clean_s)
+            
+            # Then look for standard clinical diagnoses
+            elif any(k in s_lower for k in diag_keywords):
+                if clean_s not in diag_bullets:
+                    diag_bullets.append(clean_s)
+
+        # Fallbacks if none are found
+        if not urgent_bullets:
+            urgent_bullets.append("No explicit urgency or critical severity keywords flagged in the text.")
+        if not diag_bullets:
+            diag_bullets.append("No standard clinical diagnosis or assessment terminology detected.")
+
+        return {
+            "Urgent": urgent_bullets,
+            "Diagnoses": diag_bullets
+        }
 
     def extract_text_from_multiple(uploaded_files_list):
         combined_text = ""
         for file in uploaded_files_list:
-            combined_text += f"\n\n{'='*40}\n📄 SOURCE FILE: {file.name}\n{'='*40}\n\n"
             file_bytes = file.read()
             reader = PdfReader(io.BytesIO(file_bytes))
             for page in reader.pages:
                 extracted = page.extract_text()
                 if extracted:
-                    combined_text += extracted + "\n"
+                    combined_text += extracted + " "
         return combined_text
 
-    # --- THE NEW CRASH-PROOF REPORTLAB PDF GENERATOR ---
-    def generate_pdf(summary_text, alerts, meds, history, name, dob, mrn):
+    def generate_pdf(urgent_list, diag_list, name, dob, mrn):
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
         
@@ -191,11 +179,19 @@ else:
         Normal = styles['Normal']
         Heading2 = styles['Heading2']
         TitleStyle = styles['Title']
+        
+        # Create a clean bullet point style with proper indentation
+        BulletStyle = ParagraphStyle(
+            'Bullet',
+            parent=Normal,
+            leftIndent=20,
+            firstLineIndent=-15,
+            spaceAfter=8,
+            leading=14
+        )
 
-        # Cleans text so ReportLab doesn't confuse symbols with HTML tags
         def safe_text(raw_text):
             clean = html.escape(str(raw_text))
-            # Mathematically force a space in giant barcode-like strings
             clean = re.sub(r'([^\s]{70})', r'\1 ', clean)
             return clean
 
@@ -211,26 +207,20 @@ else:
         story.append(Paragraph(f"<b>Medical Record #:</b> {safe_text(mrn) if mrn else 'N/A'}", Normal))
         story.append(Spacer(1, 15))
 
-        # Alerts Section
-        story.append(Paragraph("<b>Aggregated Critical Alerts & Red Flags:</b>", Heading2))
-        for alert in alerts:
-            story.append(Paragraph(f"• {safe_text(alert)}", Normal))
-        story.append(Spacer(1, 10))
+        # --- URGENT SECTION ---
+        story.append(Paragraph("<font color='red'><b>Urgent & Critical Findings:</b></font>", Heading2))
+        story.append(Spacer(1, 5))
+        for item in urgent_list:
+            story.append(Paragraph(f"• {safe_text(item)}", BulletStyle))
+        story.append(Spacer(1, 15))
 
-        # Meds Section
-        story.append(Paragraph("<b>Aggregated Medications:</b>", Heading2))
-        for med in meds[:25]: 
-            story.append(Paragraph(f"• {safe_text(med)}", Normal))
-        story.append(Spacer(1, 10))
-
-        # Summary Section
-        story.append(Paragraph("<b>Combined Text Extraction (All Files):</b>", Heading2))
-        for line in summary_text.split("\n"):
-            if line.strip():
-                story.append(Paragraph(safe_text(line), Normal))
-                story.append(Spacer(1, 4))
+        # --- DIAGNOSIS SECTION ---
+        story.append(Paragraph("<b>Clinical Diagnoses & Assessments:</b>", Heading2))
+        story.append(Spacer(1, 5))
+        for item in diag_list:
+            story.append(Paragraph(f"• {safe_text(item)}", BulletStyle))
         
-        # Build document and return
+        # Build document
         doc.build(story)
         buffer.seek(0)
         return buffer
@@ -254,33 +244,35 @@ else:
 
     if uploaded_files:
         if st.button("🚀 Process All Files Together"):
-            st.info(f"Merging {len(uploaded_files)} document(s) into a master file...")
+            st.info(f"Scanning {len(uploaded_files)} document(s) for clinical diagnostics...")
             
-            with st.spinner("Extracting and analyzing batch data..."):
+            with st.spinner("Extracting targeted sentences into bullet points..."):
                 raw_text = extract_text_from_multiple(uploaded_files)
                 result = parse_clinical_text(raw_text)
 
-            st.write("### 🚨 Master Extracted Red Flags")
-            alerts = result.get("Critical_Alerts", [])
-            for alert in alerts:
+            # Display a preview on screen
+            st.write("### 🚨 Urgent Findings Preview (Top 5)")
+            for alert in result["Urgent"][:5]:
                 st.write(f"- {alert}")
+                
+            st.write("### 🩺 Diagnoses Preview (Top 5)")
+            for diag in result["Diagnoses"][:5]:
+                st.write(f"- {diag}")
 
-            st.write("### 🩺 Master Document Ready")
-            st.success("Batch successfully parsed! Click below to download the compiled multi-page PDF report.")
+            st.success("Targeted extraction complete! Click below to download the bulleted PDF report.")
 
+            # Generate the bullet-point PDF
             pdf_buffer = generate_pdf(
-                summary_text=result.get("Summary", ""),
-                alerts=result.get("Critical_Alerts", []),
-                meds=result.get("Medications", []),
-                history=result.get("History", ""),
+                urgent_list=result["Urgent"],
+                diag_list=result["Diagnoses"],
                 name=patient_name, 
                 dob=patient_dob, 
                 mrn=patient_mrn
             )
 
             st.download_button(
-                label="⬇️ Download Master PDF Report",
+                label="⬇️ Download Targeted Diagnostics Report",
                 data=pdf_buffer,
-                file_name="DocUFile_Master_Report.pdf",
+                file_name="DocUFile_Diagnostics_Report.pdf",
                 mime="application/pdf"
             )
