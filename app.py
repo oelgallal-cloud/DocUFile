@@ -87,10 +87,31 @@ if not st.session_state["logged_in"]:
         password = st.text_input("Password", type="password", placeholder="Enter password")
         submit_button = st.form_submit_button("Log In", use_container_width=True)
         
-      if submit_button:
+        if submit_button:
             if username == "admin" and password == "admin":
                 st.session_state["logged_in"] = True
                 st.success("Access Granted!")
                 st.rerun()
             else:
                 st.error("Incorrect Username or Password. Please try again.")
+                
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- LOCKED MAIN CONTENT (ONLY SHOWS IF LOGGED IN) ---
+else:
+    if st.sidebar.button("🚪 Log Out"):
+        st.session_state["logged_in"] = False
+        st.rerun()
+
+    st.markdown("""
+        <div class="main-header">
+            <h1>🩺 DocUFile</h1>
+            <p>Secure Clinical Document Parser & Triage Assistant</p>
+            <span style="background-color: rgba(255,255,255,0.2); padding: 5px 10px; border-radius: 15px; font-size: 0.8em;">
+                🔒 Zero API Keys Required • 100% Local Processing • Multi-File Batch Ready
+            </span>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # ---------------------------------
+    # LOCAL CLINICAL PARSER
