@@ -68,4 +68,4 @@ if not st.session_state["logged_in"]:
         if username == "admin" and password == "admin":
             st.session_state["logged_in"] = True
             st.success("Access Granted!")
-            st.rer
+            st.rerun()
