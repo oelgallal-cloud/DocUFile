@@ -1,0 +1,30 @@
+name: DocUFile Security Scanner
+
+# Tell the robot to run every time you update the main code
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  audit-code:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Download My Code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Security Guards
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit pip-audit
+
+    - name: Guard 1 - Scan My Code (Bandit)
+      run: bandit -r app.py
+
+    - name: Guard 2 - Scan My Libraries (Pip-Audit)
+      run: pip-audit -r requirements.txt
