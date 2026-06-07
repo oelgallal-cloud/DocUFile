@@ -111,7 +111,7 @@ else:
             <h1>🩺 DocUFile</h1>
             <p>Targeted Clinical Extraction & Urgent Diagnostics Parser</p>
             <span style="background-color: rgba(255,255,255,0.2); padding: 5px 10px; border-radius: 15px; font-size: 0.8em;">
-                🔒 Zero API Keys • Bullet Point Summarization • Focus on Diagnostics
+                🔒 Zero API Keys • Strict Deduplication • Concise Findings Extraction
             </span>
         </div>
     """, unsafe_allow_html=True)
@@ -120,44 +120,50 @@ else:
     # TARGETED DIAGNOSTICS PARSER
     # ---------------------------------
     def parse_clinical_text(text):
-        # 1. Clean weird PDF line breaks to form proper continuous sentences
+        # 1. Clean up weird PDF line breaks to form proper continuous sentences
         clean_text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text) 
         # 2. Split the massive text block into individual grammatical sentences
         sentences = re.split(r'(?<=[.!?])\s+', clean_text)
 
-        urgent_bullets = []
-        diag_bullets = []
+        # Use Python SETS instead of LISTS. This instantly deletes years of duplicate historical notes.
+        urgent_bullets = set()
+        finding_bullets = set()
 
-        urgent_keywords = ['acute', 'severe', 'critical', 'emergency', 'urgent', 'abnormal', 'malignant', 'life-threatening', 'stat', 'immediate']
-        diag_keywords = ['diagnosis', 'diagnoses', 'assessment', 'impression', 'condition', 'icd', 'syndrome', 'disease', 'disorder', 'pathology']
+        urgent_keywords = ['acute', 'severe', 'critical', 'emergency', 'urgent', 'malignan', 'life-threatening', 'hemorrhage', 'infarct']
+        # Strictly focused on findings, evidence, and primary assessments
+        diag_keywords = ['findings:', 'impression:', 'assessment:', 'evidence of', 'consistent with', 'diagnosed with', 'reveals', 'conclusion:']
 
         for sentence in sentences:
             s_lower = sentence.lower()
-            clean_s = sentence.strip()
+            # Clean out excessive spacing from OCR
+            clean_s = re.sub(r'\s+', ' ', sentence).strip()
             
-            # Skip tiny fragments that aren't real sentences
-            if len(clean_s) < 15: 
+            # STRICT NOISE FILTER: Must be a real sentence, but not a massive broken paragraph
+            if len(clean_s) < 20 or len(clean_s) > 300: 
                 continue
 
             # Prioritize urgent flags first
             if any(k in s_lower for k in urgent_keywords):
-                if clean_s not in urgent_bullets:
-                    urgent_bullets.append(clean_s)
+                urgent_bullets.add(clean_s)
             
-            # Then look for standard clinical diagnoses
+            # Then isolate core findings and impressions
             elif any(k in s_lower for k in diag_keywords):
-                if clean_s not in diag_bullets:
-                    diag_bullets.append(clean_s)
+                finding_bullets.add(clean_s)
+
+        # Convert the deduplicated sets back into sorted lists
+        final_urgent = list(urgent_bullets)
+        final_findings = list(finding_bullets)
 
         # Fallbacks if none are found
-        if not urgent_bullets:
-            urgent_bullets.append("No explicit urgency or critical severity keywords flagged in the text.")
-        if not diag_bullets:
-            diag_bullets.append("No standard clinical diagnosis or assessment terminology detected.")
+        if not final_urgent:
+            final_urgent.append("No explicit urgency or critical severity keywords flagged in the text.")
+        if not final_findings:
+            final_findings.append("No standard clinical diagnosis, findings, or assessment terminology detected.")
 
         return {
-            "Urgent": urgent_bullets,
-            "Diagnoses": diag_bullets
+            # Cap the outputs to ensure the physician gets a highly concise 2-4 page read
+            "Urgent": final_urgent[:25],
+            "Diagnoses": final_findings[:50]
         }
 
     def extract_text_from_multiple(uploaded_files_list):
@@ -186,7 +192,7 @@ else:
             parent=Normal,
             leftIndent=20,
             firstLineIndent=-15,
-            spaceAfter=8,
+            spaceAfter=10, # Increased spacing for better physician readability
             leading=14
         )
 
@@ -198,7 +204,7 @@ else:
         story = []
 
         # Header
-        story.append(Paragraph("DocUFile Master Clinical Report", TitleStyle))
+        story.append(Paragraph("DocUFile Concise Clinical Findings Report", TitleStyle))
         story.append(Spacer(1, 12))
         
         # Patient Info
@@ -209,14 +215,14 @@ else:
 
         # --- URGENT SECTION ---
         story.append(Paragraph("<font color='red'><b>Urgent & Critical Findings:</b></font>", Heading2))
-        story.append(Spacer(1, 5))
+        story.append(Spacer(1, 8))
         for item in urgent_list:
             story.append(Paragraph(f"• {safe_text(item)}", BulletStyle))
         story.append(Spacer(1, 15))
 
         # --- DIAGNOSIS SECTION ---
-        story.append(Paragraph("<b>Clinical Diagnoses & Assessments:</b>", Heading2))
-        story.append(Spacer(1, 5))
+        story.append(Paragraph("<b>Clinical Findings, Assessments & Impressions:</b>", Heading2))
+        story.append(Spacer(1, 8))
         for item in diag_list:
             story.append(Paragraph(f"• {safe_text(item)}", BulletStyle))
         
@@ -243,10 +249,10 @@ else:
     )
 
     if uploaded_files:
-        if st.button("🚀 Process All Files Together"):
-            st.info(f"Scanning {len(uploaded_files)} document(s) for clinical diagnostics...")
+        if st.button("🚀 Process & Filter All Documents"):
+            st.info(f"Scanning {len(uploaded_files)} document(s). Removing duplicates and extracting core findings...")
             
-            with st.spinner("Extracting targeted sentences into bullet points..."):
+            with st.spinner("Filtering years of history into concise bullet points..."):
                 raw_text = extract_text_from_multiple(uploaded_files)
                 result = parse_clinical_text(raw_text)
 
@@ -255,11 +261,11 @@ else:
             for alert in result["Urgent"][:5]:
                 st.write(f"- {alert}")
                 
-            st.write("### 🩺 Diagnoses Preview (Top 5)")
+            st.write("### 🩺 Clinical Findings Preview (Top 5)")
             for diag in result["Diagnoses"][:5]:
                 st.write(f"- {diag}")
 
-            st.success("Targeted extraction complete! Click below to download the bulleted PDF report.")
+            st.success("Targeted extraction complete! Duplicates removed. Click below to download the concise PDF report.")
 
             # Generate the bullet-point PDF
             pdf_buffer = generate_pdf(
@@ -271,8 +277,8 @@ else:
             )
 
             st.download_button(
-                label="⬇️ Download Targeted Diagnostics Report",
+                label="⬇️ Download Concise Findings Report",
                 data=pdf_buffer,
-                file_name="DocUFile_Diagnostics_Report.pdf",
+                file_name="DocUFile_Concise_Findings.pdf",
                 mime="application/pdf"
             )
