@@ -3,14 +3,23 @@ from pypdf import PdfReader
 import io
 import re
 import html
+import pandas as pd
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
+# --- OCR Dependencies (Wrapped in try/except for local testing safety) ---
+try:
+    from pdf2image import convert_from_bytes
+    import pytesseract
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+
 # ---------------------------------
 # PAGE SETTINGS & STYLING
 # ---------------------------------
-st.set_page_config(page_title="DocUFile", page_icon="🩺", layout="wide")
+st.set_page_config(page_title="DocUFile Pro", page_icon="🩺", layout="wide")
 
 st.markdown("""
     <style>
@@ -39,24 +48,8 @@ st.markdown("""
     }
     .logo-doc { color: #24b4ff; }
     .logo-file { color: #457b9d; }
-    .logo-icon {
-        width: 46px;
-        vertical-align: middle;
-        margin: 0 -4px;
-    }
-    div[data-testid="stForm"] {
-        background-color: transparent !important;
-        border: none !important;
-        padding: 0 !important;
-    }
-    /* Style for the tabs to make them look clickable and distinct */
-    div[data-baseweb="tab-list"] {
-        gap: 20px;
-    }
-    div[data-baseweb="tab"] {
-        font-size: 1.1rem;
-        font-weight: 600;
-    }
+    .logo-icon { width: 46px; vertical-align: middle; margin: 0 -4px; }
+    div[data-testid="stForm"] { background-color: transparent !important; border: none !important; padding: 0 !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -66,10 +59,8 @@ st.markdown("""
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
-# --- LOGIN PAGE INTERFACE ---
 if not st.session_state["logged_in"]:
     st.markdown('<div class="login-container">', unsafe_allow_html=True)
-    
     st.markdown("""
         <div class="logo-container">
             <span class="logo-doc">Doc</span>
@@ -79,7 +70,6 @@ if not st.session_state["logged_in"]:
     """, unsafe_allow_html=True)
     
     st.markdown('<h2 style="text-align:center; margin-top:0;">🔐 Login Area</h2>', unsafe_allow_html=True)
-    st.write("<p style='text-align:center; color:#9ca3af;'>Fill your details and press Enter to access clinical tools.</p>", unsafe_allow_html=True)
     
     with st.form("login_form", clear_on_submit=False):
         username = st.text_input("Username", placeholder="Enter username")
@@ -89,11 +79,9 @@ if not st.session_state["logged_in"]:
         if submit_button:
             if username == "admin" and password == "admin":
                 st.session_state["logged_in"] = True
-                st.success("Access Granted!")
                 st.rerun()
             else:
-                st.error("Incorrect Username or Password. Please try again.")
-                
+                st.error("Incorrect Username or Password.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- LOCKED MAIN CONTENT ---
@@ -104,116 +92,106 @@ else:
 
     st.markdown("""
         <div class="main-header">
-            <h1>🩺 DocUFile</h1>
-            <p>Targeted Clinical Extraction & Medication Parser</p>
-            <span style="background-color: rgba(255,255,255,0.2); padding: 5px 10px; border-radius: 15px; font-size: 0.8em;">
-                🔒 Zero API Keys • Strict Deduplication • Multi-Report Generation
-            </span>
+            <h1>🩺 DocUFile Pro</h1>
+            <p>Advanced Clinical Parser with OCR, Date Mapping & EMR Export</p>
         </div>
     """, unsafe_allow_html=True)
 
     # ---------------------------------
-    # DUAL-ENGINE PARSER (Findings + Meds)
+    # CORE PROCESSING ENGINES
     # ---------------------------------
+    def extract_text_with_ocr(uploaded_files_list):
+        combined_text = ""
+        for file in uploaded_files_list:
+            file_bytes = file.read()
+            reader = PdfReader(io.BytesIO(file_bytes))
+            doc_text = ""
+            for page in reader.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    doc_text += extracted + " "
+            
+            # OCR FALLBACK: If standard reading fails (dead fax/scan), use vision extraction
+            if len(doc_text.strip()) < 50 and OCR_AVAILABLE:
+                with st.spinner(f"Dead scan detected in {file.name}. Booting OCR Vision Engine..."):
+                    try:
+                        images = convert_from_bytes(file_bytes)
+                        for img in images:
+                            doc_text += pytesseract.image_to_string(img) + " "
+                    except Exception as e:
+                        doc_text += f" [OCR Error: Could not read image based PDF] "
+            
+            combined_text += doc_text + " "
+        return combined_text
+
     def parse_clinical_text(text):
         clean_text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text) 
         sentences = re.split(r'(?<=[.!?])\s+', clean_text)
 
-        # 3 Dedicated Sets for strict deduplication
-        urgent_bullets = set()
-        finding_bullets = set()
-        med_bullets = set()
+        urgent_bullets, finding_bullets, med_bullets = set(), set(), set()
 
         urgent_keywords = ['acute', 'severe', 'critical', 'emergency', 'urgent', 'malignan', 'life-threatening', 'hemorrhage', 'infarct']
         diag_keywords = ['findings:', 'impression:', 'assessment:', 'evidence of', 'consistent with', 'diagnosed with', 'reveals', 'conclusion:']
-        # Precision keywords to isolate medication dosages and instructions
         med_keywords = [' mg ', ' mcg ', ' ml ', ' tabs ', ' capsule', ' tablet', ' po ', ' daily ', ' bid ', ' tid ', ' qid ', ' prn ', 'dose', 'prescribed ']
+
+        # REGEX DATE FINDER: Hunts for standard dates (MM/DD/YYYY or Jan 5, 2020)
+        date_pattern = r'\b(?:\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4})\b'
 
         for sentence in sentences:
             s_lower = sentence.lower()
             clean_s = re.sub(r'\s+', ' ', sentence).strip()
             
-            # Skip noise
             if len(clean_s) < 10 or len(clean_s) > 300: 
                 continue
 
-            # 1. Meds isolation (meds are usually shorter instructions)
+            # Check if a date exists in the sentence
+            found_dates = re.findall(date_pattern, clean_s, re.IGNORECASE)
+            date_prefix = f"[{found_dates[0]}] - " if found_dates else ""
+
+            # Format the final string with the date timeline included
+            timeline_string = date_prefix + clean_s
+
             if any(k in s_lower for k in med_keywords) and len(clean_s) < 150:
-                med_bullets.add(clean_s)
-                continue # If it's a med, don't add it to diagnoses
+                med_bullets.add(timeline_string)
+                continue 
 
-            # 2. Urgent isolation
             if any(k in s_lower for k in urgent_keywords):
-                urgent_bullets.add(clean_s)
-            
-            # 3. Standard clinical findings isolation
+                urgent_bullets.add(timeline_string)
             elif any(k in s_lower for k in diag_keywords):
-                finding_bullets.add(clean_s)
-
-        final_urgent = list(urgent_bullets)
-        final_findings = list(finding_bullets)
-        final_meds = list(med_bullets)
-
-        if not final_urgent: final_urgent.append("No explicit urgency keywords flagged.")
-        if not final_findings: final_findings.append("No standard clinical diagnosis terminology detected.")
-        if not final_meds: final_meds.append("No structured medication or dosage data detected.")
+                finding_bullets.add(timeline_string)
 
         return {
-            "Urgent": final_urgent[:25],
-            "Diagnoses": final_findings[:50],
-            "Medications": final_meds[:60] # Store up to 60 distinct historical meds
+            "Urgent": list(urgent_bullets)[:25] if urgent_bullets else ["No explicit urgency keywords flagged."],
+            "Diagnoses": list(finding_bullets)[:50] if finding_bullets else ["No standard clinical diagnosis terminology detected."],
+            "Medications": list(med_bullets)[:60] if med_bullets else ["No structured medication or dosage data detected."]
         }
 
-    def extract_text_from_multiple(uploaded_files_list):
-        combined_text = ""
-        for file in uploaded_files_list:
-            file_bytes = file.read()
-            reader = PdfReader(io.BytesIO(file_bytes))
-            for page in reader.pages:
-                extracted = page.extract_text()
-                if extracted:
-                    combined_text += extracted + " "
-        return combined_text
-
-    # Dynamic PDF Generator that handles whichever report is requested
+    # ---------------------------------
+    # EXPORT GENERATORS (PDF & CSV)
+    # ---------------------------------
     def generate_pdf(report_title, sections_dict, name, dob, mrn):
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
-        
         styles = getSampleStyleSheet()
-        Normal = styles['Normal']
-        Heading2 = styles['Heading2']
-        TitleStyle = styles['Title']
-        
-        BulletStyle = ParagraphStyle(
-            'Bullet', parent=Normal, leftIndent=20, firstLineIndent=-15, spaceAfter=10, leading=14
-        )
+        Normal, Heading2, TitleStyle = styles['Normal'], styles['Heading2'], styles['Title']
+        BulletStyle = ParagraphStyle('Bullet', parent=Normal, leftIndent=20, firstLineIndent=-15, spaceAfter=10, leading=14)
 
         def safe_text(raw_text):
             clean = html.escape(str(raw_text))
-            clean = re.sub(r'([^\s]{70})', r'\1 ', clean)
-            return clean
+            return re.sub(r'([^\s]{70})', r'\1 ', clean)
 
         story = []
-
-        # Header
         story.append(Paragraph(report_title, TitleStyle))
         story.append(Spacer(1, 12))
-        
-        # Patient Info
         story.append(Paragraph(f"<b>Patient Name:</b> {safe_text(name) if name else 'N/A'}", Normal))
         story.append(Paragraph(f"<b>Date of Birth:</b> {safe_text(dob) if dob else 'N/A'}", Normal))
         story.append(Paragraph(f"<b>Medical Record #:</b> {safe_text(mrn) if mrn else 'N/A'}", Normal))
         story.append(Spacer(1, 15))
 
-        # Dynamically loop through the sections provided (Findings vs Meds)
         for section_title, item_list in sections_dict.items():
-            # If the word 'Urgent' is in the title, color it red
-            if 'Urgent' in section_title:
-                story.append(Paragraph(f"<font color='red'><b>{section_title}</b></font>", Heading2))
-            else:
-                story.append(Paragraph(f"<b>{section_title}</b>", Heading2))
-                
+            color_tag = "<font color='red'>" if 'Urgent' in section_title else ""
+            color_end = "</font>" if 'Urgent' in section_title else ""
+            story.append(Paragraph(f"{color_tag}<b>{section_title}</b>{color_end}", Heading2))
             story.append(Spacer(1, 8))
             for item in item_list:
                 story.append(Paragraph(f"• {safe_text(item)}", BulletStyle))
@@ -223,87 +201,70 @@ else:
         buffer.seek(0)
         return buffer
 
+    def generate_csv(urgent, diagnoses, meds):
+        # Pad lists so they match in length for the CSV grid
+        max_len = max(len(urgent), len(diagnoses), len(meds))
+        df = pd.DataFrame({
+            "Urgent Findings": urgent + [""] * (max_len - len(urgent)),
+            "Clinical Diagnoses": diagnoses + [""] * (max_len - len(diagnoses)),
+            "Medications": meds + [""] * (max_len - len(meds))
+        })
+        return df.to_csv(index=False).encode('utf-8')
+
     # ---------------------------------
-    # SIDEBAR & MAIN INTERFACE
+    # SIDEBAR & MAIN UI
     # ---------------------------------
     st.sidebar.title("📋 Patient Demographics")
-    st.sidebar.write("Optional — used only for the PDF report headers.")
     patient_name = st.sidebar.text_input("Patient Full Name", placeholder="Jane Smith")
     patient_dob = st.sidebar.text_input("Date of Birth", placeholder="MM/DD/YYYY")
     patient_mrn = st.sidebar.text_input("Medical Record # (MRN)", placeholder="123-456-789")
 
-    st.markdown("<br><hr>", unsafe_allow_html=True)
-
-    uploaded_files = st.file_uploader(
-        "📂 Upload Patient PDF(s) [Up to 300MB supported]",
-        type="pdf",
-        accept_multiple_files=True
-    )
+    uploaded_files = st.file_uploader("📂 Upload Patient PDF(s) [OCR Enabled]", type="pdf", accept_multiple_files=True)
 
     if uploaded_files:
-        # One master button to read the heavy documents once
         if st.button("🚀 Process & Extract All Patient Data", use_container_width=True):
-            st.info(f"Scanning {len(uploaded_files)} document(s). Removing duplicates and isolating records...")
-            
-            with st.spinner("Extracting Findings and Medications simultaneously..."):
-                raw_text = extract_text_from_multiple(uploaded_files)
-                result = parse_clinical_text(raw_text)
+            with st.spinner("Extracting text, mapping timelines, and removing duplicates..."):
+                raw_text = extract_text_with_ocr(uploaded_files)
+                st.session_state["parsed_data"] = parse_clinical_text(raw_text)
+            st.success("Extraction complete! Use the search bar or download reports below.")
 
-            st.success("Extraction complete! Select a tab below to view and download specific reports.")
+    # --- LIVE SEARCH & FILTER DASHBOARD ---
+    if "parsed_data" in st.session_state:
+        result = st.session_state["parsed_data"]
+        
+        st.markdown("<hr>", unsafe_allow_html=True)
+        search_query = st.text_input("🔍 Live Filter (Search by condition, date, or medication):", placeholder="e.g., 'Cardiac', '2023', 'Lisinopril'")
+        
+        # Filter lists dynamically based on search
+        def filter_list(data_list, query):
+            if not query: return data_list
+            return [item for item in data_list if query.lower() in item.lower()]
 
-            # --- DUAL TABS FOR SEPARATE REPORTS ---
-            tab1, tab2 = st.tabs(["🩺 Clinical Findings Report", "💊 Historical Medication Report"])
+        f_urgent = filter_list(result["Urgent"], search_query)
+        f_diag = filter_list(result["Diagnoses"], search_query)
+        f_meds = filter_list(result["Medications"], search_query)
 
-            # TAB 1: FINDINGS
-            with tab1:
-                st.write("### 🚨 Urgent Findings Preview (Top 5)")
-                for alert in result["Urgent"][:5]:
-                    st.write(f"- {alert}")
-                    
-                st.write("### 🩺 Clinical Findings Preview (Top 5)")
-                for diag in result["Diagnoses"][:5]:
-                    st.write(f"- {diag}")
+        # Build Export Files (Using Filtered Data)
+        findings_pdf = generate_pdf("DocUFile Findings", {"Urgent & Critical Findings:": f_urgent, "Clinical Findings & Assessments:": f_diag}, patient_name, patient_dob, patient_mrn)
+        meds_pdf = generate_pdf("DocUFile Medication Record", {"Historical Prescriptions & Dosages:": f_meds}, patient_name, patient_dob, patient_mrn)
+        csv_export = generate_csv(f_urgent, f_diag, f_meds)
 
-                # Build Findings PDF
-                findings_pdf = generate_pdf(
-                    report_title="DocUFile Concise Clinical Findings",
-                    sections_dict={
-                        "Urgent & Critical Findings:": result["Urgent"],
-                        "Clinical Findings & Assessments:": result["Diagnoses"]
-                    },
-                    name=patient_name, dob=patient_dob, mrn=patient_mrn
-                )
+        # Tabs for Display
+        tab1, tab2, tab3 = st.tabs(["🩺 Findings Report", "💊 Medication Record", "📊 EMR CSV Export"])
 
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.download_button(
-                    label="⬇️ Download Concise Findings Report (PDF)",
-                    data=findings_pdf,
-                    file_name="DocUFile_Findings_Report.pdf",
-                    mime="application/pdf",
-                    key="btn_findings"
-                )
+        with tab1:
+            st.write("### 🚨 Urgent Findings")
+            for alert in f_urgent[:10]: st.write(f"- {alert}")
+            st.write("### 🩺 Clinical Diagnoses")
+            for diag in f_diag[:10]: st.write(f"- {diag}")
+            st.download_button("⬇️ Download Findings PDF", data=findings_pdf, file_name="Findings_Report.pdf", mime="application/pdf")
 
-            # TAB 2: MEDICATIONS
-            with tab2:
-                st.write("### 💊 Extracted Medications Preview (Top 10)")
-                st.write("*Note: History spanning years has been deduplicated into single distinct entries.*")
-                for med in result["Medications"][:10]:
-                    st.write(f"- {med}")
+        with tab2:
+            st.write("### 💊 Historical Medications")
+            for med in f_meds[:15]: st.write(f"- {med}")
+            st.download_button("⬇️ Download Medications PDF", data=meds_pdf, file_name="Medication_Report.pdf", mime="application/pdf")
 
-                # Build Medications PDF
-                meds_pdf = generate_pdf(
-                    report_title="DocUFile Historical Medication Record",
-                    sections_dict={
-                        "Deduplicated Historical Prescriptions & Dosages:": result["Medications"]
-                    },
-                    name=patient_name, dob=patient_dob, mrn=patient_mrn
-                )
-
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.download_button(
-                    label="⬇️ Download Medication History Report (PDF)",
-                    data=meds_pdf,
-                    file_name="DocUFile_Medication_Report.pdf",
-                    mime="application/pdf",
-                    key="btn_meds"
-                )
+        with tab3:
+            st.write("### 💾 Export to EMR")
+            st.write("Download the structured data grid to easily copy/paste or import directly into your clinic's database.")
+            st.download_button("⬇️ Download Excel/CSV Data", data=csv_export, file_name="DocUFile_EMR_Export.csv", mime="text/csv")
