@@ -22,14 +22,6 @@ st.markdown("""
         text-align: center;
         margin-bottom: 25px;
     }
-    .info-card {
-        background-color: #ffffff;
-        padding: 20px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        height: 100%;
-        color: #111827;
-    }
     .login-container {
         max-width: 450px;
         margin: 40px auto;
@@ -45,12 +37,8 @@ st.markdown("""
         letter-spacing: -1px;
         margin-bottom: 15px;
     }
-    .logo-doc {
-        color: #24b4ff; 
-    }
-    .logo-file {
-        color: #457b9d;
-    }
+    .logo-doc { color: #24b4ff; }
+    .logo-file { color: #457b9d; }
     .logo-icon {
         width: 46px;
         vertical-align: middle;
@@ -60,6 +48,14 @@ st.markdown("""
         background-color: transparent !important;
         border: none !important;
         padding: 0 !important;
+    }
+    /* Style for the tabs to make them look clickable and distinct */
+    div[data-baseweb="tab-list"] {
+        gap: 20px;
+    }
+    div[data-baseweb="tab"] {
+        font-size: 1.1rem;
+        font-weight: 600;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -100,7 +96,7 @@ if not st.session_state["logged_in"]:
                 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- LOCKED MAIN CONTENT (ONLY SHOWS IF LOGGED IN) ---
+# --- LOCKED MAIN CONTENT ---
 else:
     if st.sidebar.button("🚪 Log Out"):
         st.session_state["logged_in"] = False
@@ -109,61 +105,63 @@ else:
     st.markdown("""
         <div class="main-header">
             <h1>🩺 DocUFile</h1>
-            <p>Targeted Clinical Extraction & Urgent Diagnostics Parser</p>
+            <p>Targeted Clinical Extraction & Medication Parser</p>
             <span style="background-color: rgba(255,255,255,0.2); padding: 5px 10px; border-radius: 15px; font-size: 0.8em;">
-                🔒 Zero API Keys • Strict Deduplication • Concise Findings Extraction
+                🔒 Zero API Keys • Strict Deduplication • Multi-Report Generation
             </span>
         </div>
     """, unsafe_allow_html=True)
 
     # ---------------------------------
-    # TARGETED DIAGNOSTICS PARSER
+    # DUAL-ENGINE PARSER (Findings + Meds)
     # ---------------------------------
     def parse_clinical_text(text):
-        # 1. Clean up weird PDF line breaks to form proper continuous sentences
         clean_text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text) 
-        # 2. Split the massive text block into individual grammatical sentences
         sentences = re.split(r'(?<=[.!?])\s+', clean_text)
 
-        # Use Python SETS instead of LISTS. This instantly deletes years of duplicate historical notes.
+        # 3 Dedicated Sets for strict deduplication
         urgent_bullets = set()
         finding_bullets = set()
+        med_bullets = set()
 
         urgent_keywords = ['acute', 'severe', 'critical', 'emergency', 'urgent', 'malignan', 'life-threatening', 'hemorrhage', 'infarct']
-        # Strictly focused on findings, evidence, and primary assessments
         diag_keywords = ['findings:', 'impression:', 'assessment:', 'evidence of', 'consistent with', 'diagnosed with', 'reveals', 'conclusion:']
+        # Precision keywords to isolate medication dosages and instructions
+        med_keywords = [' mg ', ' mcg ', ' ml ', ' tabs ', ' capsule', ' tablet', ' po ', ' daily ', ' bid ', ' tid ', ' qid ', ' prn ', 'dose', 'prescribed ']
 
         for sentence in sentences:
             s_lower = sentence.lower()
-            # Clean out excessive spacing from OCR
             clean_s = re.sub(r'\s+', ' ', sentence).strip()
             
-            # STRICT NOISE FILTER: Must be a real sentence, but not a massive broken paragraph
-            if len(clean_s) < 20 or len(clean_s) > 300: 
+            # Skip noise
+            if len(clean_s) < 10 or len(clean_s) > 300: 
                 continue
 
-            # Prioritize urgent flags first
+            # 1. Meds isolation (meds are usually shorter instructions)
+            if any(k in s_lower for k in med_keywords) and len(clean_s) < 150:
+                med_bullets.add(clean_s)
+                continue # If it's a med, don't add it to diagnoses
+
+            # 2. Urgent isolation
             if any(k in s_lower for k in urgent_keywords):
                 urgent_bullets.add(clean_s)
             
-            # Then isolate core findings and impressions
+            # 3. Standard clinical findings isolation
             elif any(k in s_lower for k in diag_keywords):
                 finding_bullets.add(clean_s)
 
-        # Convert the deduplicated sets back into sorted lists
         final_urgent = list(urgent_bullets)
         final_findings = list(finding_bullets)
+        final_meds = list(med_bullets)
 
-        # Fallbacks if none are found
-        if not final_urgent:
-            final_urgent.append("No explicit urgency or critical severity keywords flagged in the text.")
-        if not final_findings:
-            final_findings.append("No standard clinical diagnosis, findings, or assessment terminology detected.")
+        if not final_urgent: final_urgent.append("No explicit urgency keywords flagged.")
+        if not final_findings: final_findings.append("No standard clinical diagnosis terminology detected.")
+        if not final_meds: final_meds.append("No structured medication or dosage data detected.")
 
         return {
-            # Cap the outputs to ensure the physician gets a highly concise 2-4 page read
             "Urgent": final_urgent[:25],
-            "Diagnoses": final_findings[:50]
+            "Diagnoses": final_findings[:50],
+            "Medications": final_meds[:60] # Store up to 60 distinct historical meds
         }
 
     def extract_text_from_multiple(uploaded_files_list):
@@ -177,7 +175,8 @@ else:
                     combined_text += extracted + " "
         return combined_text
 
-    def generate_pdf(urgent_list, diag_list, name, dob, mrn):
+    # Dynamic PDF Generator that handles whichever report is requested
+    def generate_pdf(report_title, sections_dict, name, dob, mrn):
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
         
@@ -186,14 +185,8 @@ else:
         Heading2 = styles['Heading2']
         TitleStyle = styles['Title']
         
-        # Create a clean bullet point style with proper indentation
         BulletStyle = ParagraphStyle(
-            'Bullet',
-            parent=Normal,
-            leftIndent=20,
-            firstLineIndent=-15,
-            spaceAfter=10, # Increased spacing for better physician readability
-            leading=14
+            'Bullet', parent=Normal, leftIndent=20, firstLineIndent=-15, spaceAfter=10, leading=14
         )
 
         def safe_text(raw_text):
@@ -204,7 +197,7 @@ else:
         story = []
 
         # Header
-        story.append(Paragraph("DocUFile Concise Clinical Findings Report", TitleStyle))
+        story.append(Paragraph(report_title, TitleStyle))
         story.append(Spacer(1, 12))
         
         # Patient Info
@@ -213,20 +206,19 @@ else:
         story.append(Paragraph(f"<b>Medical Record #:</b> {safe_text(mrn) if mrn else 'N/A'}", Normal))
         story.append(Spacer(1, 15))
 
-        # --- URGENT SECTION ---
-        story.append(Paragraph("<font color='red'><b>Urgent & Critical Findings:</b></font>", Heading2))
-        story.append(Spacer(1, 8))
-        for item in urgent_list:
-            story.append(Paragraph(f"• {safe_text(item)}", BulletStyle))
-        story.append(Spacer(1, 15))
-
-        # --- DIAGNOSIS SECTION ---
-        story.append(Paragraph("<b>Clinical Findings, Assessments & Impressions:</b>", Heading2))
-        story.append(Spacer(1, 8))
-        for item in diag_list:
-            story.append(Paragraph(f"• {safe_text(item)}", BulletStyle))
+        # Dynamically loop through the sections provided (Findings vs Meds)
+        for section_title, item_list in sections_dict.items():
+            # If the word 'Urgent' is in the title, color it red
+            if 'Urgent' in section_title:
+                story.append(Paragraph(f"<font color='red'><b>{section_title}</b></font>", Heading2))
+            else:
+                story.append(Paragraph(f"<b>{section_title}</b>", Heading2))
+                
+            story.append(Spacer(1, 8))
+            for item in item_list:
+                story.append(Paragraph(f"• {safe_text(item)}", BulletStyle))
+            story.append(Spacer(1, 15))
         
-        # Build document
         doc.build(story)
         buffer.seek(0)
         return buffer
@@ -235,7 +227,7 @@ else:
     # SIDEBAR & MAIN INTERFACE
     # ---------------------------------
     st.sidebar.title("📋 Patient Demographics")
-    st.sidebar.write("Optional — used only for the PDF report header.")
+    st.sidebar.write("Optional — used only for the PDF report headers.")
     patient_name = st.sidebar.text_input("Patient Full Name", placeholder="Jane Smith")
     patient_dob = st.sidebar.text_input("Date of Birth", placeholder="MM/DD/YYYY")
     patient_mrn = st.sidebar.text_input("Medical Record # (MRN)", placeholder="123-456-789")
@@ -249,36 +241,69 @@ else:
     )
 
     if uploaded_files:
-        if st.button("🚀 Process & Filter All Documents"):
-            st.info(f"Scanning {len(uploaded_files)} document(s). Removing duplicates and extracting core findings...")
+        # One master button to read the heavy documents once
+        if st.button("🚀 Process & Extract All Patient Data", use_container_width=True):
+            st.info(f"Scanning {len(uploaded_files)} document(s). Removing duplicates and isolating records...")
             
-            with st.spinner("Filtering years of history into concise bullet points..."):
+            with st.spinner("Extracting Findings and Medications simultaneously..."):
                 raw_text = extract_text_from_multiple(uploaded_files)
                 result = parse_clinical_text(raw_text)
 
-            # Display a preview on screen
-            st.write("### 🚨 Urgent Findings Preview (Top 5)")
-            for alert in result["Urgent"][:5]:
-                st.write(f"- {alert}")
-                
-            st.write("### 🩺 Clinical Findings Preview (Top 5)")
-            for diag in result["Diagnoses"][:5]:
-                st.write(f"- {diag}")
+            st.success("Extraction complete! Select a tab below to view and download specific reports.")
 
-            st.success("Targeted extraction complete! Duplicates removed. Click below to download the concise PDF report.")
+            # --- DUAL TABS FOR SEPARATE REPORTS ---
+            tab1, tab2 = st.tabs(["🩺 Clinical Findings Report", "💊 Historical Medication Report"])
 
-            # Generate the bullet-point PDF
-            pdf_buffer = generate_pdf(
-                urgent_list=result["Urgent"],
-                diag_list=result["Diagnoses"],
-                name=patient_name, 
-                dob=patient_dob, 
-                mrn=patient_mrn
-            )
+            # TAB 1: FINDINGS
+            with tab1:
+                st.write("### 🚨 Urgent Findings Preview (Top 5)")
+                for alert in result["Urgent"][:5]:
+                    st.write(f"- {alert}")
+                    
+                st.write("### 🩺 Clinical Findings Preview (Top 5)")
+                for diag in result["Diagnoses"][:5]:
+                    st.write(f"- {diag}")
 
-            st.download_button(
-                label="⬇️ Download Concise Findings Report",
-                data=pdf_buffer,
-                file_name="DocUFile_Concise_Findings.pdf",
-                mime="application/pdf"
-            )
+                # Build Findings PDF
+                findings_pdf = generate_pdf(
+                    report_title="DocUFile Concise Clinical Findings",
+                    sections_dict={
+                        "Urgent & Critical Findings:": result["Urgent"],
+                        "Clinical Findings & Assessments:": result["Diagnoses"]
+                    },
+                    name=patient_name, dob=patient_dob, mrn=patient_mrn
+                )
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.download_button(
+                    label="⬇️ Download Concise Findings Report (PDF)",
+                    data=findings_pdf,
+                    file_name="DocUFile_Findings_Report.pdf",
+                    mime="application/pdf",
+                    key="btn_findings"
+                )
+
+            # TAB 2: MEDICATIONS
+            with tab2:
+                st.write("### 💊 Extracted Medications Preview (Top 10)")
+                st.write("*Note: History spanning years has been deduplicated into single distinct entries.*")
+                for med in result["Medications"][:10]:
+                    st.write(f"- {med}")
+
+                # Build Medications PDF
+                meds_pdf = generate_pdf(
+                    report_title="DocUFile Historical Medication Record",
+                    sections_dict={
+                        "Deduplicated Historical Prescriptions & Dosages:": result["Medications"]
+                    },
+                    name=patient_name, dob=patient_dob, mrn=patient_mrn
+                )
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.download_button(
+                    label="⬇️ Download Medication History Report (PDF)",
+                    data=meds_pdf,
+                    file_name="DocUFile_Medication_Report.pdf",
+                    mime="application/pdf",
+                    key="btn_meds"
+                )
