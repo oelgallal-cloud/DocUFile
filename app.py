@@ -212,4 +212,98 @@ else:
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
         styles = getSampleStyleSheet()
-        Normal, Heading2, TitleStyle = styles['Normal'], styles
+        Normal, Heading2, TitleStyle = styles['Normal'], styles['Heading2'], styles['Title']
+        BulletStyle = ParagraphStyle('Bullet', parent=Normal, leftIndent=20, firstLineIndent=-15, spaceAfter=10, leading=14)
+
+        def safe_text(raw_text):
+            clean = html.escape(str(raw_text))
+            return re.sub(r'([^\s]{70})', r'\1 ', clean)
+
+        story = []
+        story.append(Paragraph(report_title, TitleStyle))
+        story.append(Spacer(1, 12))
+        story.append(Paragraph(f"<b>Patient Name:</b> {safe_text(name) if name else 'N/A'}", Normal))
+        story.append(Paragraph(f"<b>Date of Birth:</b> {safe_text(dob) if dob else 'N/A'}", Normal))
+        story.append(Paragraph(f"<b>Medical Record #:</b> {safe_text(mrn) if mrn else 'N/A'}", Normal))
+        story.append(Spacer(1, 15))
+
+        for section_title, item_list in sections_dict.items():
+            color_tag = "<font color='red'>" if 'Urgent' in section_title else ""
+            color_end = "</font>" if 'Urgent' in section_title else ""
+            story.append(Paragraph(f"{color_tag}<b>{section_title}</b>{color_end}", Heading2))
+            story.append(Spacer(1, 8))
+            for item in item_list:
+                story.append(Paragraph(f"• {safe_text(item)}", BulletStyle))
+            story.append(Spacer(1, 15))
+        
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
+
+    def generate_csv(urgent, diagnoses, meds):
+        max_len = max(len(urgent), len(diagnoses), len(meds))
+        df = pd.DataFrame({
+            "Urgent Findings": urgent + [""] * (max_len - len(urgent)),
+            "Clinical Diagnoses": diagnoses + [""] * (max_len - len(diagnoses)),
+            "Medications": meds + [""] * (max_len - len(meds))
+        })
+        return df.to_csv(index=False).encode('utf-8')
+
+    # ---------------------------------
+    # SIDEBAR & MAIN UI
+    # ---------------------------------
+    st.sidebar.title("📋 Patient Demographics")
+    patient_name = st.sidebar.text_input("Patient Full Name", placeholder="Jane Smith")
+    patient_dob = st.sidebar.text_input("Date of Birth", placeholder="MM/DD/YYYY")
+    patient_mrn = st.sidebar.text_input("Medical Record # (MRN)", placeholder="123-456-789")
+
+    uploaded_files = st.file_uploader("📂 Upload Patient PDF(s) [OCR Enabled]", type="pdf", accept_multiple_files=True)
+
+    if uploaded_files:
+        if st.button("🚀 Process & Extract All Patient Data", use_container_width=True):
+            # Record the action in the permanent audit trail
+            logger.info(f"PROCESS: '{st.session_state['username']}' extracted {len(uploaded_files)} documents for MRN: {patient_mrn if patient_mrn else 'Unknown'}.")
+            
+            with st.spinner("Extracting text, mapping timelines, and removing duplicates..."):
+                st.session_state["last_active"] = time.time() # Reset timeout clock
+                raw_text = extract_text_with_ocr(uploaded_files)
+                st.session_state["parsed_data"] = parse_clinical_text(raw_text)
+            st.success("Extraction complete! Use the search bar or download reports below.")
+
+    # --- LIVE SEARCH & FILTER DASHBOARD ---
+    if "parsed_data" in st.session_state:
+        result = st.session_state["parsed_data"]
+        
+        st.markdown("<hr>", unsafe_allow_html=True)
+        search_query = st.text_input("🔍 Live Filter (Search by condition, date, or medication):", placeholder="e.g., 'Cardiac', '2023', 'Lisinopril'")
+        
+        def filter_list(data_list, query):
+            if not query: return data_list
+            return [item for item in data_list if query.lower() in item.lower()]
+
+        f_urgent = filter_list(result["Urgent"], search_query)
+        f_diag = filter_list(result["Diagnoses"], search_query)
+        f_meds = filter_list(result["Medications"], search_query)
+
+        findings_pdf = generate_pdf("DocUFile Findings", {"Urgent & Critical Findings:": f_urgent, "Clinical Findings & Assessments:": f_diag}, patient_name, patient_dob, patient_mrn)
+        meds_pdf = generate_pdf("DocUFile Medication Record", {"Historical Prescriptions & Dosages:": f_meds}, patient_name, patient_dob, patient_mrn)
+        csv_export = generate_csv(f_urgent, f_diag, f_meds)
+
+        tab1, tab2, tab3 = st.tabs(["🩺 Findings Report", "💊 Medication Record", "📊 EMR CSV Export"])
+
+        with tab1:
+            st.write("### 🚨 Urgent Findings")
+            for alert in f_urgent[:10]: st.write(f"- {alert}")
+            st.write("### 🩺 Clinical Diagnoses")
+            for diag in f_diag[:10]: st.write(f"- {diag}")
+            st.download_button("⬇️ Download Findings PDF", data=findings_pdf, file_name="Findings_Report.pdf", mime="application/pdf")
+
+        with tab2:
+            st.write("### 💊 Historical Medications")
+            for med in f_meds[:15]: st.write(f"- {med}")
+            st.download_button("⬇️ Download Medications PDF", data=meds_pdf, file_name="Medication_Report.pdf", mime="application/pdf")
+
+        with tab3:
+            st.write("### 💾 Export to EMR")
+            st.write("Download the structured data grid to easily copy/paste or import directly into your clinic's database.")
+            st.download_button("⬇️ Download Excel/CSV Data", data=csv_export, file_name="DocUFile_EMR_Export.csv", mime="text/csv")
